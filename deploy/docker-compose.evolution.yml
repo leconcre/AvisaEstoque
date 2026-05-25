@@ -1,0 +1,161 @@
+# =============================================================================
+# Evolution API — stack para colar como "Service" no Coolify.
+# =============================================================================
+# Postgres e Redis NÃO são compartilhados com o app — o Evolution cria dezenas
+# de tabelas próprias e o Neon do app não deve ser sobrecarregado com isso.
+# Tudo aqui é INTERNO ao stack, sem porta pública.
+#
+# Como o app fala com o Evolution:
+#   - O serviço `evolution-api` está anexado tanto à rede interna do stack
+#     (`evolution-net`, pra falar com Postgres/Redis) quanto à rede externa
+#     `coolify` (que o Coolify cria automaticamente e onde o app também roda).
+#   - No app, basta setar EVOLUTION_API_URL=http://evolution-api:8080
+#   - DNS interno do Docker resolve o nome `evolution-api`.
+#
+# Pareamento do WhatsApp (QR Code):
+#   - O Evolution mapeia 8080 SOMENTE em 127.0.0.1 do VPS, NUNCA em 0.0.0.0.
+#   - Para escanear o QR, do seu desktop:
+#       ssh -L 8080:127.0.0.1:8080 root@<ip-do-vps>
+#     Daí o navegador local em http://localhost:8080 acessa.
+#   - Encerre o tunnel logo após parear; não deixe a porta aberta.
+#
+# Imagem fixada em v2.2.3 — uma das últimas estáveis da série v2 no momento da
+# escrita deste runbook. NÃO usar `latest`: o Evolution muda envs entre minors
+# e você pode subir um v3 sem perceber e quebrar o app.
+# Ao atualizar, conferir o CHANGELOG do projeto antes de bumpar.
+# =============================================================================
+
+services:
+  evolution-api:
+    image: atendai/evolution-api:v2.2.3
+    container_name: evolution-api
+    restart: unless-stopped
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+      evolution-redis:
+        condition: service_healthy
+    # NÃO use "ports: 0.0.0.0:8080" aqui — só localhost do VPS via SSH tunnel.
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - evolution-net
+      - coolify
+    environment:
+      # --- server ---
+      SERVER_TYPE: http
+      SERVER_PORT: "8080"
+      SERVER_URL: ${EVOLUTION_SERVER_URL:-http://evolution-api:8080}
+
+      # --- auth (apikey global, mesma chave usada pelo app em EVOLUTION_API_KEY) ---
+      AUTHENTICATION_TYPE: apikey
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "false"
+
+      # --- persistência ---
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD}@evolution-postgres:5432/evolution?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: evolution_exchange
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      DATABASE_DELETE_MESSAGE: "false"
+
+      # --- cache (Redis dedicado, não compartilhado) ---
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379/0
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+
+      # --- comportamento ---
+      LANGUAGE: pt-BR
+      LOG_LEVEL: "ERROR,WARN,INFO"
+      LOG_COLOR: "true"
+      LOG_BAILEYS: error
+      DEL_INSTANCE: "false"
+      CONFIG_SESSION_PHONE_CLIENT: AvisaEstoque
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      QRCODE_LIMIT: "10"
+      QRCODE_COLOR: "#11854F"
+
+      # --- integrações que NÃO usamos no MVP — desligadas explicitamente ---
+      WEBSOCKET_ENABLED: "false"
+      WA_BUSINESS_TOKEN_WEBHOOK: "false"
+      TYPEBOT_ENABLED: "false"
+      CHATWOOT_ENABLED: "false"
+      OPENAI_ENABLED: "false"
+      DIFY_ENABLED: "false"
+      S3_ENABLED: "false"
+      SQS_ENABLED: "false"
+      RABBITMQ_ENABLED: "false"
+
+      TZ: America/Sao_Paulo
+    volumes:
+      # Sessões Baileys — SE PERDER, PRECISA PAREAR O QR DE NOVO.
+      # Coolify monta este path no host com gerenciamento de volume nomeado.
+      - evolution_instances:/evolution/instances
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  evolution-postgres:
+    image: postgres:16-alpine
+    container_name: evolution-postgres
+    restart: unless-stopped
+    # Sem `ports:` — só acessível dentro de evolution-net.
+    networks:
+      - evolution-net
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD}
+      POSTGRES_DB: evolution
+      TZ: America/Sao_Paulo
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  evolution-redis:
+    image: redis:7-alpine
+    container_name: evolution-redis
+    restart: unless-stopped
+    # Sem `ports:` — só acessível dentro de evolution-net.
+    networks:
+      - evolution-net
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - evolution_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+networks:
+  # Rede interna do stack — Postgres e Redis só vivem aqui.
+  evolution-net:
+    driver: bridge
+  # Rede externa criada pelo Coolify; o app AvisaEstoque está nela também.
+  # Se essa rede ainda não existir no servidor, criar com:
+  #   docker network create coolify
+  coolify:
+    external: true
+    name: coolify
+
+volumes:
+  # Sessões do Evolution — backup periódico recomendado (vide DEPLOY.md §9).
+  evolution_instances:
+  evolution_postgres_data:
+  evolution_redis_data:

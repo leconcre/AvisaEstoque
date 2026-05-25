@@ -1,0 +1,239 @@
+// AvisaEstoque — schema Prisma
+// Notas de design:
+//  - companyId em toda entidade de negócio: eixo de multi-tenancy.
+//    Toda query DEVE filtrar por companyId via getCurrentCompany(session).
+//  - Status (CRITICAL/WARNING/SAFE/EXPIRED) é DERIVADO de expirationDate e
+//    alertDaysBefore na hora da leitura — nunca persistir (HANDOFF §4.4).
+//  - Idempotência do alerta: @@unique([batchId, alertDate]) no Alert.
+//  - alertTime (HH:mm) por Company: scheduler dispara apenas no slot da empresa.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  // URL "principal" do app — em prod no Neon é a pooled (-pooler), para queries
+  // de runtime com PgBouncer absorvendo o burst de conexões.
+  url       = env("DATABASE_URL")
+  // URL "direta" usada por `prisma migrate deploy`, `migrate dev`, `db push`
+  // e `db pull`. Migrations abrem transações longas e DDL — incompatíveis com
+  // o modo transaction-pool do PgBouncer. Em Neon, é o mesmo hostname sem o
+  // sufixo "-pooler". Em dev local, pode apontar pro mesmo banco que DATABASE_URL.
+  directUrl = env("DIRECT_URL")
+}
+
+enum AlertStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum NotificationType {
+  /// Resumo diário de lotes na janela de alerta. UM por (companyId, alertDate).
+  EXPIRATION_DIGEST
+  /// Mensagens emitidas pelo próprio app (ex.: aviso de feature nova).
+  SYSTEM
+  /// Disparado por "Testar envio" — útil para o usuário confirmar que o sino funciona.
+  TEST
+}
+
+enum CompanyPlan {
+  /// In-app only. Default para novos cadastros — alinhado com o reposicionamento.
+  BASIC
+  /// In-app + WhatsApp + limites maiores no assistente. Premium.
+  PRO
+}
+
+model Company {
+  id            String   @id @default(cuid())
+  name          String
+  whatsappPhone String   // E.164: +5521965457832
+  alertEnabled  Boolean  @default(true)
+  // Horário de disparo por empresa, formato "HH:mm" em America/Sao_Paulo.
+  // O scheduler roda a cada 15 min e só dispara para empresas cujo slot bate.
+  alertTime     String   @default("08:00")
+  // Última varredura concluída (alimenta "Última varredura há X min" no painel).
+  lastScanAt    DateTime?
+  // Plano da empresa (Fase 6 introduz, Fase 9 enforça limites + canais).
+  // BASIC default — alinhado com reposicionamento "in-app é o canal crítico".
+  plan          CompanyPlan @default(BASIC)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  users           User[]
+  products        Product[]
+  batches         Batch[]
+  alerts          Alert[]
+  snapshots       DailySnapshot[]
+  notifications   Notification[]
+  assistantUsage  AssistantUsage[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model Product {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  ean       String?  // código de barras
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  batches Batch[]
+
+  // EAN não é necessariamente único globalmente, mas precisa ser único dentro da empresa
+  // para que autocomplete por EAN devolva no máximo um match.
+  @@unique([companyId, ean])
+  @@index([companyId, ean])
+}
+
+model Batch {
+  id              String   @id @default(cuid())
+  companyId       String
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  productId       String
+  // Product NÃO cascateia para Batch: se um produto for removido no futuro,
+  // queremos Restrict (default) para forçar uma decisão consciente.
+  product         Product  @relation(fields: [productId], references: [id])
+  lotNumber       String
+  quantity        Int
+  expirationDate  DateTime @db.Date
+  alertDaysBefore Int      @default(30)
+  // SOFT DELETE: o endpoint DELETE /api/batches/:id grava aqui em vez de
+  // remover a linha. Motivo: preservar histórico de Alert para a métrica
+  // "Alertas (30d)" do painel — caso contrário, dar baixa em lote vencido
+  // (fluxo MAIS comum do produto) zeraria audit trail e mentiria no contador.
+  // Toda listagem filtra { deletedAt: null }. Helper getBatchStatus opera no
+  // mesmo subconjunto. O cron de varredura também ignora soft-deleted.
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  alerts Alert[]
+
+  // ÍNDICE CRÍTICO do scanner diário: o cron varre por (companyId, expirationDate)
+  // com filtro deletedAt IS NULL. Listagem do painel ordena por expirationDate
+  // dentro do tenant. EXPLAIN ANALYZE esperado: Index Scan, sem sort externo.
+  // O filtro deletedAt fica como Filter no plano (volume baixo no MVP, OK).
+  @@index([companyId, expirationDate])
+  @@index([expirationDate])
+  @@index([productId])
+  @@index([companyId, deletedAt])
+}
+
+model Alert {
+  id           String      @id @default(cuid())
+  companyId    String
+  // Company permanece Cascade: offboarding de tenant é uma operação só.
+  company      Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  batchId      String
+  // Batch NÃO cascateia: Alert é o audit trail do que já avisamos. Removemos
+  // o lote via soft delete (deletedAt), o que preserva esta linha intacta e
+  // mantém o COUNT(SENT, sentAt >= now-30d) honesto no painel.
+  batch        Batch       @relation(fields: [batchId], references: [id])
+  status       AlertStatus @default(PENDING)
+  sentAt       DateTime?
+  errorMessage String?
+  attempts     Int         @default(0)
+  // alertDate é só a data (sem hora) — chave de idempotência diária.
+  // Constraint abaixo garante 1 alerta por (batch, dia), independente de tentativas.
+  alertDate    DateTime    @db.Date
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@unique([batchId, alertDate])
+  @@index([companyId, status])
+  @@index([companyId, sentAt])
+}
+
+// =============================================================================
+// Notification — feed in-app (sino do TopBar).
+// =============================================================================
+// Para o digest diário de expirações, dedupKey = "expdigest:YYYY-MM-DD" e o
+// @@unique([companyId, dedupKey]) impede duplicação na 2ª varredura do mesmo
+// dia. Essa é a contraparte do @@unique de Alert: cada canal tem sua chave de
+// idempotência, mas TODOS dependem do mesmo lock por (batch, dia) na fase de
+// reserva PENDING.
+//
+// payload é JSON estruturado — schema definido em src/lib/notifications/types.ts.
+// Não armazenamos texto renderizado: a UI renderiza a partir do payload pra
+// que mudanças de cópia não exijam migration.
+// =============================================================================
+model Notification {
+  id        String           @id @default(cuid())
+  companyId String
+  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  payload   Json
+  readAt    DateTime?
+  dedupKey  String
+  createdAt DateTime         @default(now())
+
+  // Idempotência diária via dedupKey por empresa.
+  @@unique([companyId, dedupKey])
+  // Sino: contar não-lidas por empresa (READ IS NULL).
+  @@index([companyId, readAt])
+  // Feed do dropdown: últimas N por empresa, ordenadas por data.
+  @@index([companyId, createdAt(sort: Desc)])
+}
+
+// =============================================================================
+// AssistantUsage — contagem diária de perguntas ao assistente, por empresa.
+// =============================================================================
+// Persistido em vez de in-memory porque:
+//   - Sobrevive a restart do app (rate-limit in-memory zeraria).
+//   - Em deploy multi-replica (Coolify horizontal scaling futuro), todas as
+//     réplicas concordam no contador.
+//   - Permite mostrar "X perguntas restantes hoje" na UI sem chamar endpoint
+//     intermediário.
+//
+// Incremento é atômico via prisma.assistantUsage.upsert + update increment,
+// dentro de uma transação que TAMBÉM verifica o cap — assim mesmo com
+// requests concorrentes, ninguém ultrapassa o limite por race.
+// =============================================================================
+model AssistantUsage {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  // Dia civil em America/Sao_Paulo (alinhado com todayCivilSP).
+  day       DateTime @db.Date
+  count     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, day])
+  @@index([companyId, day])
+}
+
+// Snapshot diário de "lotes que precisam de atenção" por empresa.
+// Usado pelo painel para calcular vsYesterday sem precisar refazer agregações
+// históricas. Gravado pelo cron ao final de cada varredura.
+model DailySnapshot {
+  id              String   @id @default(cuid())
+  companyId       String
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  snapshotDate    DateTime @db.Date
+  needsAttention  Int      // count de batches em CRITICAL+WARNING+EXPIRED
+  criticalCount   Int
+  warningCount    Int
+  safeCount       Int
+  expiredCount    Int
+  createdAt       DateTime @default(now())
+
+  @@unique([companyId, snapshotDate])
+  @@index([companyId, snapshotDate])
+}

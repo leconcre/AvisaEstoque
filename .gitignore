@@ -1,0 +1,44 @@
+# dependencies
+node_modules
+.pnp
+.pnp.js
+
+# next
+.next
+out
+build
+dist
+
+# production
+*.tsbuildinfo
+next-env.d.ts
+
+# env
+.env
+.env.local
+.env.development.local
+.env.production.local
+.env.test.local
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+
+# prisma
+prisma/*.db
+
+# dev log
+dev.log
+.tmp-*
+
+# coverage
+coverage

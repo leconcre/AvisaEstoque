@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AvisaEstoque · Protótipo</title>
+<link rel="icon" type="image/svg+xml" href="public/logo.svg" />
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter', 'ui-sans-serif', 'system-ui'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  :root {
+    --bg:        oklch(0.99 0.005 95);
+    --surface:   oklch(1 0 0);
+    --border:    oklch(0.92 0.008 95);
+    --border-strong: oklch(0.86 0.01 95);
+    --fg:        oklch(0.18 0.01 260);
+    --fg-2:      oklch(0.32 0.012 260);
+    --muted:     oklch(0.55 0.015 260);
+    --muted-2:   oklch(0.7 0.012 260);
+
+    --brand:     oklch(0.55 0.18 155);
+    --brand-hover: oklch(0.62 0.2 155);
+    --brand-soft: oklch(0.95 0.05 155);
+    --brand-fg:  oklch(0.32 0.12 155);
+
+    --crit:      oklch(0.6 0.22 25);
+    --crit-soft: oklch(0.96 0.04 25);
+    --crit-border: oklch(0.85 0.1 25);
+
+    --warn:      oklch(0.7 0.17 75);
+    --warn-soft: oklch(0.97 0.05 75);
+    --warn-border: oklch(0.87 0.1 75);
+
+    --safe:      oklch(0.6 0.14 155);
+    --safe-soft: oklch(0.96 0.04 155);
+    --safe-border: oklch(0.85 0.08 155);
+
+    --exp:       oklch(0.5 0.01 260);
+    --exp-soft:  oklch(0.95 0.005 260);
+    --exp-border: oklch(0.88 0.008 260);
+
+    --shadow-sm: 0 1px 2px 0 oklch(0.18 0.01 260 / 0.04);
+    --shadow-md: 0 4px 14px -4px oklch(0.18 0.01 260 / 0.08), 0 1px 2px 0 oklch(0.18 0.01 260 / 0.04);
+    --shadow-lg: 0 24px 48px -16px oklch(0.18 0.01 260 / 0.18), 0 2px 6px -1px oklch(0.18 0.01 260 / 0.06);
+  }
+
+  html, body, #root { height: 100%; }
+  body {
+    font-family: 'Inter', ui-sans-serif, system-ui;
+    background: var(--bg);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+  }
+
+  /* Ray-cast borders for premium interactive surfaces */
+  .ray {
+    position: relative;
+    isolation: isolate;
+  }
+  .ray::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.7),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.06);
+  }
+  .ray-dark::before {
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.18),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.18);
+  }
+
+  /* Pulse only on CRITICAL */
+  @keyframes pulse-crit {
+    0%, 100% { box-shadow: 0 0 0 0 oklch(0.6 0.22 25 / 0.5); }
+    70%      { box-shadow: 0 0 0 6px oklch(0.6 0.22 25 / 0); }
+  }
+  .pulse-crit { animation: pulse-crit 1.8s ease-out infinite; }
+
+  /* Newly created row highlight */
+  @keyframes row-flash {
+    0%   { background-color: oklch(0.95 0.05 155); }
+    100% { background-color: transparent; }
+  }
+  .row-flash { animation: row-flash 2s ease-out 1; }
+
+  /* Toast */
+  @keyframes toast-in {
+    0% { opacity: 0; transform: translateY(8px) scale(0.98); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .toast-in { animation: toast-in 220ms cubic-bezier(0.22,1,0.36,1); }
+
+  /* Slide-up screen transition for mobile flow */
+  @keyframes screen-in {
+    0% { opacity: 0; transform: translateY(6px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  .screen-in { animation: screen-in 220ms cubic-bezier(0.22,1,0.36,1); }
+
+  /* Subtle gradient sweep for CTA */
+  .btn-primary {
+    background:
+      linear-gradient(180deg, oklch(0.62 0.2 155) 0%, oklch(0.55 0.18 155) 100%);
+    color: white;
+    transition: transform 150ms ease-out, box-shadow 150ms ease-out, filter 150ms ease-out;
+    box-shadow:
+      0 1px 2px 0 oklch(0.18 0.01 260 / 0.08),
+      inset 0 1px 0 0 oklch(1 0 0 / 0.2),
+      inset 0 -1px 0 0 oklch(0 0 0 / 0.18);
+  }
+  .btn-primary:hover { filter: brightness(1.04); box-shadow: 0 4px 14px -4px oklch(0.55 0.18 155 / 0.45), inset 0 1px 0 0 oklch(1 0 0 / 0.2), inset 0 -1px 0 0 oklch(0 0 0 / 0.18); }
+  .btn-primary:active { transform: translateY(0.5px); filter: brightness(0.98); }
+
+  .btn-ghost {
+    transition: all 150ms ease-out;
+  }
+  .btn-ghost:hover { background: oklch(0.96 0.005 95); }
+
+  .card-hover {
+    transition: transform 150ms ease-out, box-shadow 150ms ease-out, border-color 150ms ease-out;
+  }
+  .card-hover:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+  }
+
+  /* Input ring */
+  .ring-brand:focus-within {
+    outline: none;
+    box-shadow: 0 0 0 3px oklch(0.55 0.18 155 / 0.18);
+    border-color: oklch(0.55 0.18 155);
+  }
+
+  /* Heartbeat animation for the brand mark on the login screen only */
+  .ae-heartbeat {
+    stroke-dasharray: 38 38;
+    stroke-dashoffset: 38;
+    animation: ae-heartbeat 3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  @keyframes ae-heartbeat {
+    0%   { stroke-dashoffset: 38;  opacity: 0.35; }
+    18%  { stroke-dashoffset: 0;   opacity: 1; }
+    40%  { stroke-dashoffset: 0;   opacity: 1; }
+    55%  { stroke-dashoffset: -38; opacity: 0; }
+    100% { stroke-dashoffset: -38; opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ae-heartbeat { animation: none; stroke-dashoffset: 0; opacity: 1; }
+    .pulse-crit   { animation: none; }
+    .toast-in, .screen-in, .row-flash { animation: none; }
+  }
+
+  /* Universal focus-visible — brand ring on any keyboard-focused interactive */
+  :where(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px oklch(0.55 0.18 155 / 0.28), 0 0 0 1px oklch(0.55 0.18 155 / 0.7);
+    border-radius: inherit;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: oklch(0.88 0.008 95); border-radius: 999px; border: 2px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background: oklch(0.8 0.01 95); }
+
+  /* Chat mock dots */
+  @keyframes dot-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+    30% { transform: translateY(-2px); opacity: 1; }
+  }
+  .dot { animation: dot-bounce 1.4s infinite ease-in-out; }
+  .dot:nth-child(2) { animation-delay: 0.15s; }
+  .dot:nth-child(3) { animation-delay: 0.3s; }
+
+  /* Grid bg for login illustrative panel */
+  .grid-bg {
+    background-image:
+      radial-gradient(circle at 1px 1px, oklch(0.7 0.05 155 / 0.18) 1px, transparent 0);
+    background-size: 18px 18px;
+  }
+
+  /* Slider */
+  input[type="range"].brand {
+    -webkit-appearance: none; appearance: none;
+    height: 4px; border-radius: 999px;
+    background: oklch(0.9 0.008 95);
+    outline: none;
+  }
+  input[type="range"].brand::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 16px; border-radius: 999px;
+    background: white;
+    border: 1px solid oklch(0.55 0.18 155);
+    box-shadow: 0 1px 4px oklch(0.55 0.18 155 / 0.35);
+    cursor: pointer;
+  }
+  input[type="range"].brand::-moz-range-thumb {
+    width: 16px; height: 16px; border-radius: 999px;
+    background: white;
+    border: 1px solid oklch(0.55 0.18 155);
+    box-shadow: 0 1px 4px oklch(0.55 0.18 155 / 0.35);
+    cursor: pointer;
+  }
+
+  /* Toggle */
+  .toggle {
+    width: 36px; height: 20px; border-radius: 999px;
+    background: oklch(0.9 0.008 95);
+    position: relative;
+    transition: background 180ms ease-out;
+  }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 999px;
+    background: white;
+    box-shadow: 0 1px 2px oklch(0.18 0.01 260 / 0.2);
+    transition: transform 180ms cubic-bezier(0.22,1,0.36,1);
+  }
+  .toggle[data-on="true"] { background: var(--brand); }
+  .toggle[data-on="true"]::after { transform: translateX(16px); }
+
+  /* Keyboard kbd */
+  kbd {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+    padding: 2px 5px;
+    border-radius: 5px;
+    background: oklch(0.96 0.005 95);
+    border: 1px solid var(--border);
+    box-shadow: inset 0 -1px 0 0 oklch(0 0 0 / 0.06);
+    color: var(--fg-2);
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="src/icons.jsx"></script>
+<script type="text/babel" src="src/data.jsx"></script>
+<script type="text/babel" src="src/primitives.jsx"></script>
+<script type="text/babel" src="src/screens/login.jsx"></script>
+<script type="text/babel" src="src/screens/dashboard.jsx"></script>
+<script type="text/babel" src="src/screens/batches.jsx"></script>
+<script type="text/babel" src="src/screens/new_batch.jsx"></script>
+<script type="text/babel" src="src/screens/settings.jsx"></script>
+<script type="text/babel" src="src/app.jsx"></script>
+</body>
+</html>
