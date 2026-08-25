@@ -1,9 +1,17 @@
 # AvisaEstoque
 
+> **Status: MVP funcional, não lançado.** Roda ponta a ponta em ambiente de
+> desenvolvimento; nunca teve cliente pagante nem dado real de empresa.
+
 Micro-SaaS B2B que monitora datas de vencimento de produtos em estoque e dispara
 alertas proativos via **WhatsApp** para o gerente da empresa antes que os produtos vençam.
 
 > Sistema **ativo (push)**, não passivo (dashboard). O cliente não precisa abrir o app — o WhatsApp avisa.
+
+![Painel do AvisaEstoque](docs/capturas/dashboard.png)
+
+![Lista de lotes](docs/capturas/lotes.png)
+_Lotes classificados por proximidade do vencimento: crítico, atenção, seguro e vencido._
 
 ---
 
