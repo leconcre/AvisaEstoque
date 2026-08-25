@@ -25,10 +25,13 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   }
   const ctx = contextFromSession(session);
 
-  // Fonte de verdade do nome: a tabela, não o token.
+  // Fonte de verdade do nome E do plano: a tabela, não o token.
+  // O JWT carrega esses dois campos no login inicial e fica stale assim que
+  // a empresa edita o nome ou troca de plano. Lendo aqui no Server Component
+  // garante que sidebar/badges refletem o estado atual no próximo render.
   const company = await prisma.company.findFirst({
     where: { id: ctx.companyId },
-    select: { name: true },
+    select: { name: true, plan: true },
   });
 
   async function doSignOut() {
@@ -38,7 +41,11 @@ export default async function DashboardLayout({ children }: { children: ReactNod
 
   return (
     <AppShell
-      user={{ name: ctx.name, companyName: company?.name ?? ctx.companyName }}
+      user={{
+        name: ctx.name,
+        companyName: company?.name ?? ctx.companyName,
+        plan: company?.plan ?? 'BASIC',
+      }}
       signOutAction={doSignOut}
     >
       <GlobalShortcuts />

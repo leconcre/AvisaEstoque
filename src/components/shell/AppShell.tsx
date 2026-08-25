@@ -10,7 +10,7 @@ import { NotificationBell } from '@/components/notifications/NotificationBell';
 
 interface AppShellProps {
   children: ReactNode;
-  user: { name: string; companyName: string };
+  user: { name: string; companyName: string; plan: 'BASIC' | 'PRO' };
   signOutAction: () => Promise<void> | void;
 }
 
@@ -43,7 +43,18 @@ export function AppShell({ children, user, signOutAction }: AppShellProps) {
         </div>
 
         <div className="mx-4 mt-2 rounded-lg border border-border bg-[var(--brand-soft)] px-3 py-2.5">
-          <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--brand-fg)]">Empresa</p>
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--brand-fg)]">Empresa</p>
+            {user.plan === 'PRO' ? (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--brand)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white">
+                <Sparkles className="h-2.5 w-2.5" /> PRO
+              </span>
+            ) : (
+              <span className="rounded-full border border-border bg-surface px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted">
+                BASIC
+              </span>
+            )}
+          </div>
           <p className="mt-0.5 text-sm font-medium text-fg" title={user.companyName}>
             {user.companyName}
           </p>
